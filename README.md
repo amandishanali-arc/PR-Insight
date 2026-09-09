@@ -26,12 +26,21 @@ Findings and scores are decision-support signals—not guarantees that code is c
 
 ## Screenshots
 
-Screenshots are not committed yet. Intended locations:
+### Analyze Pull Request
 
-- `docs/screenshots/analyze.png`
-- `docs/screenshots/review-result.png`
-- `docs/screenshots/history.png`
-- `docs/screenshots/version-comparison.png`
+![PR Insight analyze view with GitHub connected](<documents/Screenshot 2026-09-09 200226.png>)
+
+### Review Result
+
+![AI-assisted pull request review result with score and analysis coverage](<documents/Screenshot 2026-09-09 200314.png>)
+
+### Review History
+
+![Saved pull request review history](<documents/Screenshot 2026-09-09 200348.png>)
+
+### About
+
+![PR Insight about view](<documents/Screenshot 2026-09-09 200416.png>)
 
 ## Architecture
 
