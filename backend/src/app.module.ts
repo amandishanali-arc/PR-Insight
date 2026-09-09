@@ -5,6 +5,9 @@ import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { GithubModule } from './github/github.module';
 import { ReviewsModule } from './reviews/reviews.module';
+import { AiModule } from './ai/ai.module';
+import { AuthModule } from './auth/auth.module';
+import { GithubAppModule } from './github-app/github-app.module';
 
 @Module({
   imports: [
@@ -18,6 +21,9 @@ import { ReviewsModule } from './reviews/reviews.module';
     }),
     GithubModule,
     ReviewsModule,
+    AiModule,
+    AuthModule,
+    GithubAppModule,
   ],
   controllers: [AppController],
   providers: [AppService],

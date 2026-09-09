@@ -41,6 +41,7 @@ lerna-debug.log*
 .env.test.local
 .env.production.local
 .env.local
+*.pem
 
 # temp directory
 .temp
@@ -54,3 +55,8 @@ pids
 
 # Diagnostic reports (https://nodejs.org/api/report.html)
 report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
+
+# GitHub App private keys
+*.pem
+secrets/
+.env

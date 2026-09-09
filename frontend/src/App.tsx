@@ -1,121 +1,151 @@
-import { useState } from 'react'
-import heroImg from './assets/hero.png'
-import reactLogo from './assets/react.svg'
-import viteLogo from './assets/vite.svg'
+import { useEffect, useRef, useState } from 'react'
 import './App.css'
+import { AnalyzeForm } from './components/AnalyzeForm'
+import { AnalysisProgress } from './components/AnalysisProgress'
+import { AboutView } from './components/AboutView'
+import { ErrorState } from './components/ErrorState'
+import { FeatureRow } from './components/FeatureRow'
+import { Footer } from './components/Footer'
+import { Header, type AppView } from './components/Header'
+import { HistoryDetail } from './components/HistoryDetail'
+import { HistoryView } from './components/HistoryView'
+import { HowItWorks } from './components/HowItWorks'
+import { ReviewSummary } from './components/ReviewSummary'
+import { createReview } from './services/reviewApi'
+import type { Review } from './types/review'
+import { AuthView } from './components/AuthView'
+import { useAuth } from './auth/AuthContext'
+import { GithubConnection } from './components/GithubConnection'
+
+interface AppRoute {
+  view: AppView
+  reviewId: string | null
+}
+
+const readRouteFromHash = (): AppRoute => {
+  const hash = window.location.hash.slice(1)
+  if (hash === 'login') return { view: 'login', reviewId: null }
+  if (hash === 'register') return { view: 'register', reviewId: null }
+  if (hash === 'about') return { view: 'about', reviewId: null }
+  if (hash === 'history') return { view: 'history', reviewId: null }
+  if (hash.startsWith('history/') && hash.length > 8) {
+    return { view: 'history', reviewId: hash.slice(8) }
+  }
+  return { view: 'analyze', reviewId: null }
+}
 
 function App() {
-  const [count, setCount] = useState(0)
+  const { user, isAuthenticated, loading: authLoading, logout } = useAuth()
+  const [review, setReview] = useState<Review | null>(null)
+  const [isLoading, setIsLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [pullRequestUrl, setPullRequestUrl] = useState('')
+  const [githubConnectRequest, setGithubConnectRequest] = useState(0)
+  const initialRoute = readRouteFromHash()
+  const [activeView, setActiveView] = useState<AppView>(initialRoute.view)
+  const [historyReviewId, setHistoryReviewId] = useState<string | null>(initialRoute.reviewId)
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    const syncView = () => {
+      let route = readRouteFromHash()
+      if (!authLoading && !isAuthenticated && !['login', 'register', 'about'].includes(route.view)) {
+        window.history.replaceState(null, '', '#login')
+        route = { view: 'login', reviewId: null }
+      }
+      if (!authLoading && isAuthenticated && ['login', 'register'].includes(route.view)) {
+        window.history.replaceState(null, '', '#analyze')
+        route = { view: 'analyze', reviewId: null }
+      }
+      setActiveView(route.view)
+      setHistoryReviewId(route.reviewId)
+      if (!['#login', '#register', '#analyze', '#history', '#about'].includes(window.location.hash) && !route.reviewId) {
+        window.history.replaceState(null, '', isAuthenticated ? '#analyze' : '#login')
+      }
+    }
+
+    syncView()
+    window.addEventListener('hashchange', syncView)
+    return () => window.removeEventListener('hashchange', syncView)
+  }, [authLoading, isAuthenticated])
+
+  const handleAnalyze = async (pullRequestUrl: string) => {
+    setIsLoading(true)
+    setError(null)
+    setReview(null)
+
+    try {
+      setReview(await createReview(pullRequestUrl))
+    } catch (requestError) {
+      setError(
+        requestError instanceof Error
+          ? requestError.message
+          : 'Something went wrong while analyzing the pull request.',
+      )
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  const handleNewReview = () => {
+    window.location.hash = 'analyze'
+    setReview(null)
+    setError(null)
+    setPullRequestUrl('')
+    window.setTimeout(() => inputRef.current?.focus(), 0)
+  }
+
+  const handleNavigate = (view: AppView) => {
+    if (!isAuthenticated && (view === 'analyze' || view === 'history')) view = 'login'
+    setActiveView(view)
+    setHistoryReviewId(null)
+    window.location.hash = view
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+  }
+
+  const handleHistorySelect = (id: string) => {
+    window.location.hash = `history/${id}`
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+  }
 
   return (
-    <>
-      <section id="center">
-        <div className="hero">
-          <img src={heroImg} className="base" width="170" height="179" alt="" />
-          <img src={reactLogo} className="framework" alt="React logo" />
-          <img src={viteLogo} className="vite" alt="Vite logo" />
-        </div>
-        <div>
-          <h1>Get started</h1>
-          <p>
-            Edit <code>src/App.tsx</code> and save to test <code>HMR</code>
-          </p>
-        </div>
-        <button
-          type="button"
-          className="counter"
-          onClick={() => setCount((count) => count + 1)}
-        >
-          Count is {count}
-        </button>
-      </section>
+    <div className="app-shell">
+      <Header activeView={activeView} onNavigate={handleNavigate} user={user} onLogout={logout} />
 
-      <div className="ticks"></div>
+      <main>
+        {authLoading && <section className="auth-loading"><span className="progress-spinner" /> Restoring your session...</section>}
+        {!authLoading && activeView === 'login' && <AuthView mode="login" onSwitch={() => handleNavigate('register')} onSuccess={() => handleNavigate('analyze')} />}
+        {!authLoading && activeView === 'register' && <AuthView mode="register" onSwitch={() => handleNavigate('login')} onSuccess={() => handleNavigate('analyze')} />}
+        {!authLoading && isAuthenticated && activeView === 'analyze' && (
+          <>
+            <section className="hero-section" id="analyze" aria-labelledby="page-title">
+              <div className="eyebrow">Code better together</div>
+              <h1 id="page-title"><span>PR</span> Insight</h1>
+              <p className="hero-copy">AI-powered GitHub Pull Request reviews</p>
+              <p className="hero-detail">Turn code changes into focused, actionable feedback before they reach production.</p>
+              <FeatureRow />
+              <GithubConnection connectRequest={githubConnectRequest} />
+              <AnalyzeForm inputRef={inputRef} pullRequestUrl={pullRequestUrl} onUrlChange={setPullRequestUrl} onSubmit={handleAnalyze} isLoading={isLoading} />
+              {isLoading && <AnalysisProgress />}
+              {error && <ErrorState message={error} onRetry={() => void handleAnalyze(pullRequestUrl)}
+                actionLabel={error.includes('Connect GitHub') ? 'Connect GitHub' : undefined}
+                onAction={error.includes('Connect GitHub') ? () => setGithubConnectRequest((value) => value + 1) : undefined} />}
+            </section>
+            {review && <ReviewSummary review={review} onAction={handleNewReview} />}
+            {!review && !isLoading && <HowItWorks />}
+          </>
+        )}
+        {!authLoading && isAuthenticated && activeView === 'history' && !historyReviewId && (
+          <HistoryView onAnalyze={() => handleNavigate('analyze')} onSelect={handleHistorySelect} />
+        )}
+        {!authLoading && isAuthenticated && activeView === 'history' && historyReviewId && (
+          <HistoryDetail id={historyReviewId} onBack={() => handleNavigate('history')} onSelectVersion={handleHistorySelect} />
+        )}
+        {!authLoading && activeView === 'about' && <AboutView />}
+      </main>
 
-      <section id="next-steps">
-        <div id="docs">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#documentation-icon"></use>
-          </svg>
-          <h2>Documentation</h2>
-          <p>Your questions, answered</p>
-          <ul>
-            <li>
-              <a href="https://vite.dev/" target="_blank">
-                <img className="logo" src={viteLogo} alt="" />
-                Explore Vite
-              </a>
-            </li>
-            <li>
-              <a href="https://react.dev/" target="_blank">
-                <img className="button-icon" src={reactLogo} alt="" />
-                Learn more
-              </a>
-            </li>
-          </ul>
-        </div>
-        <div id="social">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#social-icon"></use>
-          </svg>
-          <h2>Connect with us</h2>
-          <p>Join the Vite community</p>
-          <ul>
-            <li>
-              <a href="https://github.com/vitejs/vite" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#github-icon"></use>
-                </svg>
-                GitHub
-              </a>
-            </li>
-            <li>
-              <a href="https://chat.vite.dev/" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#discord-icon"></use>
-                </svg>
-                Discord
-              </a>
-            </li>
-            <li>
-              <a href="https://x.com/vite_js" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#x-icon"></use>
-                </svg>
-                X.com
-              </a>
-            </li>
-            <li>
-              <a href="https://bsky.app/profile/vite.dev" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#bluesky-icon"></use>
-                </svg>
-                Bluesky
-              </a>
-            </li>
-          </ul>
-        </div>
-      </section>
-
-      <div className="ticks"></div>
-      <section id="spacer"></section>
-    </>
+      <Footer />
+    </div>
   )
 }
 

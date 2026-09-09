@@ -1,7 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { ReviewsController } from './reviews.controller';
-import { beforeEach, describe, it } from 'node:test';
-import assert from 'node:assert';
+import { ReviewsService } from './reviews.service';
+import { JwtService } from '@nestjs/jwt';
 
 describe('ReviewsController', () => {
   let controller: ReviewsController;
@@ -9,13 +9,17 @@ describe('ReviewsController', () => {
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       controllers: [ReviewsController],
+      providers: [
+        { provide: ReviewsService, useValue: {} },
+        { provide: JwtService, useValue: { verifyAsync: jest.fn() } },
+      ],
     }).compile();
 
     controller = module.get<ReviewsController>(ReviewsController);
   });
 
   it('should be defined', () => {
-    assert.ok(controller);
+    expect(controller).toBeDefined();
   });
 });
 
