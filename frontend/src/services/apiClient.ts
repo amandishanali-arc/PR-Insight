@@ -1,6 +1,6 @@
 import { authStorage } from './authStorage'
 
-const API_BASE_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:3000'
+const API_BASE_URL = (import.meta.env.VITE_API_URL?.trim() || 'http://localhost:3000').replace(/\/+$/, '')
 
 interface ApiErrorBody { message?: string | string[] }
 

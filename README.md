@@ -252,6 +252,21 @@ npm run dev
 
 Open `http://localhost:5173` unless Vite reports another port.
 
+### Vercel production environment
+
+Set these variables in the respective Vercel projects for the Production environment:
+
+| Project | Variable | Value |
+| --- | --- | --- |
+| Frontend | `VITE_API_URL` | `https://<stable-backend-production-domain>` |
+| Backend | `FRONTEND_URL` | `https://<stable-frontend-production-domain>` |
+
+Use each project's stable production domain or assigned custom domain, without a path, rather than a deployment-specific preview URL. `FRONTEND_URL` must match the origin where you open the frontend. Redeploy both projects after setting the variables; Vite embeds `VITE_API_URL` at build time.
+
+The backend allows the configured frontend origin alongside the existing localhost and `127.0.0.1` origins. The frontend API defaults to `http://localhost:3000` when `VITE_API_URL` is unset or blank. GitHub App return redirects use `FRONTEND_URL`, defaulting to `http://localhost:5173`.
+
+For production GitHub App authorization, configure the app's Callback URL / Redirect URI as `https://<stable-backend-production-domain>/github-app/setup`. The current flow uses the callback configured in GitHub App settings; it does not construct a backend callback URL in application code. Keep the local callback configuration available for local development (for example, using a separate development GitHub App).
+
 ## GitHub App setup
 
 | Setting | Local value |
