@@ -1,4 +1,5 @@
 import { GUARDS_METADATA } from '@nestjs/common/constants';
+import { ConfigService } from '@nestjs/config';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { GithubAppController } from './github-app.controller';
 
@@ -39,5 +40,31 @@ describe('GithubAppController security', () => {
       url: 'https://github.com/apps/pr-insight/installations/new?state=new-state',
       statusCode: 302,
     });
+  });
+
+  it.each([
+    ['https://frontend.example.com', 'https://frontend.example.com'],
+    [' https://frontend.example.com/ ', 'https://frontend.example.com'],
+    [undefined, 'http://localhost:5173'],
+    ['', 'http://localhost:5173'],
+    ['   ', 'http://localhost:5173'],
+  ])('uses FRONTEND_URL=%s from the environment with a local fallback', async (value, expectedOrigin) => {
+    const previous = process.env.FRONTEND_URL;
+    try {
+      if (value === undefined) delete process.env.FRONTEND_URL;
+      else process.env.FRONTEND_URL = value;
+      const githubAppService = {
+        completeAuthorization: jest.fn().mockResolvedValue({ connected: true }),
+      };
+      const controller = new GithubAppController(githubAppService as never, new ConfigService());
+      await expect(controller.setup('code', 'state')).resolves.toEqual({
+        url: `${expectedOrigin}/?github=connected#analyze`,
+        statusCode: 302,
+      });
+      expect(githubAppService.completeAuthorization).toHaveBeenCalledWith('code', 'state', undefined);
+    } finally {
+      if (previous === undefined) delete process.env.FRONTEND_URL;
+      else process.env.FRONTEND_URL = previous;
+    }
   });
 });
