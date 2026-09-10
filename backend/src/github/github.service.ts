@@ -85,6 +85,7 @@ export class GithubService {
       response = await this.getFromGithub<GithubPullRequest>(apiUrl);
     } catch (error: unknown) {
       if (!(error instanceof NotFoundException) || !userId || !this.githubAppService) throw error;
+      this.logger.log(JSON.stringify({ event: 'github_private_pr_fallback', owner, repository, pullRequestNumber }));
       token = (await this.githubAppService.getRepositoryToken(userId, owner, repository)) ?? undefined;
       if (!token) {
         throw new ForbiddenException(
@@ -171,6 +172,7 @@ export class GithubService {
           }),
         );
       } catch (error: unknown) {
+        this.logger.warn(JSON.stringify({ event: 'github_pr_request_failed', authenticated: Boolean(token), githubStatus: error instanceof AxiosError ? error.response?.status ?? null : null }));
         const retryDelay = GithubService.RETRY_DELAYS_MS[attempt];
 
         if (this.isRetryableNetworkError(error) && retryDelay !== undefined) {
@@ -193,8 +195,9 @@ export class GithubService {
   }
 
   private toGithubException(error: unknown): unknown {
-    if (!(error instanceof AxiosError)) return error;
+    if (!(error instanceof AxiosError)) return new BadGatewayException('GitHub request failed. Please try again.');
     const status = error.response?.status;
+    if (status === 401) return new BadGatewayException('GitHub rejected the app access token. Check the GitHub App configuration and reconnect GitHub.');
     if (status === 404) return new NotFoundException('GitHub pull request not found.');
     if (status === 403) {
       return new ForbiddenException(
@@ -212,7 +215,7 @@ export class GithubService {
         'GitHub is temporarily unavailable. Please try again.',
       );
     }
-    return error;
+    return new BadGatewayException('GitHub request failed. Please try again.');
   }
 
   private isRetryableNetworkError(error: unknown): error is AxiosError {

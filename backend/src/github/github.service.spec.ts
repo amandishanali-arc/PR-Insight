@@ -41,6 +41,7 @@ describe('GithubService', () => {
   });
 
   it.each([
+    [401, BadGatewayException],
     [404, NotFoundException],
     [403, ForbiddenException],
   ])('maps GitHub status %s to a clean exception', async (status, ExceptionType) => {
@@ -101,6 +102,14 @@ describe('GithubService', () => {
     await expect(new GithubService({ get } as unknown as HttpService, githubApp as never)
       .getPullRequestDetails('https://github.com/owner/repo/pull/7', 'user-id'))
       .rejects.toThrow('Connect GitHub');
+  });
+
+  it('preserves a GitHub App configuration failure instead of converting it to 403', async () => {
+    const get = jest.fn().mockReturnValue(throwError(() => axiosError(404)));
+    const failure = new BadGatewayException('GitHub installation token generation failed.');
+    const githubApp = { getRepositoryToken: jest.fn().mockRejectedValue(failure) };
+    await expect(new GithubService({ get } as unknown as HttpService, githubApp as never)
+      .getPullRequestDetails('https://github.com/owner/repo/pull/7', 'user-id')).rejects.toBe(failure);
   });
 });
 

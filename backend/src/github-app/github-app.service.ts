@@ -1,8 +1,8 @@
-import { BadGatewayException, BadRequestException, ForbiddenException, Injectable } from '@nestjs/common';
+import { BadGatewayException, BadRequestException, ForbiddenException, HttpException, Injectable, Logger, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
 import { HttpService } from '@nestjs/axios';
 import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, createPrivateKey, randomBytes } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { Model, Types } from 'mongoose';
 import { firstValueFrom } from 'rxjs';
@@ -26,6 +26,7 @@ type AppAuth = (options: { type: 'app' } | { type: 'installation'; installationI
 
 @Injectable()
 export class GithubAppService {
+  private readonly logger = new Logger(GithubAppService.name);
   constructor(
     @InjectModel(GithubConnection.name) private readonly connectionModel: Model<GithubConnectionDocument>,
     @InjectModel(GithubConnectState.name) private readonly stateModel: Model<GithubConnectStateDocument>,
@@ -119,17 +120,45 @@ export class GithubAppService {
 
   async getRepositoryToken(userId: string, owner: string, repository: string): Promise<string | null> {
     const connections = await this.connectionModel.find({ userId: new Types.ObjectId(userId) }).lean().exec();
-    for (const connection of connections) {
+    this.logger.log(JSON.stringify({ event: 'github_private_access', owner, repository, connectionExists: connections.length > 0 }));
+    if (!connections.length) throw new ForbiddenException('No GitHub connection found. Connect GitHub to access private repositories.');
+    const candidates = connections.filter((connection) => !connection.accountLogin || connection.accountLogin.toLowerCase() === owner.toLowerCase());
+    if (!candidates.length) throw new ForbiddenException('No connected GitHub App installation matches this repository owner. Install or connect the app for this account.');
+    const auth = await this.createAppAuthenticator();
+    let failure: HttpException | undefined;
+    for (const connection of candidates) {
+      let stage = 'installation_token';
       try {
-        const auth = await this.createAppAuthenticator();
+        if (!Number.isSafeInteger(connection.installationId) || connection.installationId <= 0) {
+          this.logger.warn(JSON.stringify({ event: 'github_private_access_failed', code: 'installation_id_missing_or_invalid', owner, repository }));
+          failure ??= new ForbiddenException('The saved GitHub installation is invalid. Reconnect GitHub.');
+          continue;
+        }
         const result = await auth({ type: 'installation', installationId: connection.installationId, repositoryNames: [repository] });
+        stage = 'repository_access';
         await firstValueFrom(this.httpService.get(`https://api.github.com/repos/${owner}/${repository}`, { headers: this.githubHeaders(result.token), timeout: 15_000 }));
+        this.logger.log(JSON.stringify({ event: 'github_private_access_granted', owner, repository, installationId: connection.installationId }));
         return result.token;
-      } catch {
-        // This installation may belong to another account or lack this selected repository.
+      } catch (error: unknown) {
+        // Never log raw errors: Octokit/Axios errors can contain authorization headers.
+        const upstream = error as { status?: unknown; response?: { status?: unknown } } | null;
+        const value = upstream?.response?.status ?? upstream?.status;
+        const status = typeof value === 'number' ? value : undefined;
+        this.logger.warn(JSON.stringify({ event: 'github_private_access_failed', stage, owner, repository, installationId: connection.installationId, githubStatus: status ?? null }));
+        let current: HttpException;
+        if (status === 401) current = new BadGatewayException('GitHub rejected the app credentials. The server GitHub App configuration must be checked.');
+        else if (status === 403) current = new ForbiddenException('GitHub denied app access. Check installation permissions, suspension, and API rate limits.');
+        else if (status === 404 && stage === 'installation_token') current = new ForbiddenException('The GitHub installation is unavailable or no longer valid for this app. Reconnect GitHub.');
+        else if (status === 404) current = new NotFoundException('The repository was not found or is not accessible to this GitHub installation. Check the repository URL and selected repositories.');
+        else if (status === 422) current = new ForbiddenException('GitHub could not grant access to the requested repository. Check that it is selected for this installation and still exists.');
+        else if (status === 429) current = new HttpException('GitHub API rate limit reached. Try again later.', 429);
+        else if (status && status >= 500) current = new ServiceUnavailableException('GitHub is temporarily unavailable. Please try again.');
+        else current = new BadGatewayException(stage === 'installation_token' ? 'GitHub installation token generation failed. The server GitHub App configuration must be checked.' : 'GitHub repository access failed. Please try again.');
+        // Try every matching installation; retain infrastructure failures over access failures.
+        if (!failure || current.getStatus() >= 500) failure = current;
       }
     }
-    return null;
+    throw failure ?? new ForbiddenException('No accessible GitHub installation was found for this repository.');
   }
 
   private async exchangeUserCode(code: string): Promise<string> {
@@ -170,10 +199,39 @@ export class GithubAppService {
   }
 
   private async createAppAuthenticator(): Promise<AppAuth> {
+    const appId = this.config.get<string>('GITHUB_APP_ID')?.trim();
+    if (!appId || !/^\d+$/.test(appId)) {
+      this.logger.warn('github_app_configuration_missing_or_invalid: GITHUB_APP_ID');
+      throw new ServiceUnavailableException('GitHub App configuration is missing or invalid. Contact the administrator.');
+    }
+    const privateKey = this.loadPrivateKey();
     const { createAppAuth } = await import('@octokit/auth-app');
-    const privateKeyPath = this.requiredConfig('GITHUB_APP_PRIVATE_KEY_PATH');
-    const privateKey = readFileSync(privateKeyPath, 'utf8');
-    return createAppAuth({ appId: this.requiredConfig('GITHUB_APP_ID'), privateKey }) as AppAuth;
+    return createAppAuth({ appId, privateKey }) as AppAuth;
+  }
+
+  private loadPrivateKey(): string {
+    const environmentKey = this.config.get<string>('GITHUB_APP_PRIVATE_KEY')?.trim();
+    const path = this.config.get<string>('GITHUB_APP_PRIVATE_KEY_PATH')?.trim();
+    const source = environmentKey ? 'environment' : path ? 'file' : 'none';
+    this.logger.log(JSON.stringify({ event: 'github_app_key_configuration', configured: source !== 'none', source }));
+    if (source === 'none') {
+      this.logger.warn('github_app_private_key_missing');
+      throw new ServiceUnavailableException('GitHub App private key is not configured. Contact the administrator.');
+    }
+    let privateKey: string;
+    try {
+      privateKey = (environmentKey || readFileSync(path!, 'utf8')).replace(/\\r\\n/g, '\n').replace(/\\n/g, '\n');
+    } catch {
+      this.logger.warn('github_app_private_key_file_unreadable');
+      throw new ServiceUnavailableException('GitHub App private key could not be loaded. Contact the administrator.');
+    }
+    try {
+      if (createPrivateKey(privateKey).asymmetricKeyType !== 'rsa') throw new Error();
+    } catch {
+      this.logger.warn('github_app_private_key_invalid');
+      throw new ServiceUnavailableException('GitHub App private key is invalid. Contact the administrator.');
+    }
+    return privateKey;
   }
 
   private githubHeaders(token: string) {
