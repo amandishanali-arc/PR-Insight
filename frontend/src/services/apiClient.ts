@@ -19,7 +19,7 @@ export async function apiRequest<T>(path: string, init: RequestInit = {}): Promi
   if (!response.ok) {
     const errorBody = await readErrorBody(response)
     const backendMessage = Array.isArray(errorBody?.message) ? errorBody.message.join(' ') : errorBody?.message
-    if (response.status === 401) {
+    if (response.status === 401 && token === authStorage.getToken()) {
       authStorage.clear()
       window.dispatchEvent(new Event('auth:unauthorized'))
     }

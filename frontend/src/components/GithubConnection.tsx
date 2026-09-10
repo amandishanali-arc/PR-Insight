@@ -1,15 +1,17 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { connectGithub, disconnectGithub, getGithubConnectionStatus } from '../services/githubAppApi'
 import type { GithubConnectionStatus } from '../types/githubConnection'
 
 interface GithubConnectionProps {
   connectRequest?: number
+  onConnect?: () => Promise<void>
 }
 
-export function GithubConnection({ connectRequest = 0 }: GithubConnectionProps) {
+export function GithubConnection({ connectRequest = 0, onConnect }: GithubConnectionProps) {
   const [status, setStatus] = useState<GithubConnectionStatus | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const handledConnectRequest = useRef(0)
 
   const loadStatus = useCallback(async () => {
     try { setStatus(await getGithubConnectionStatus()) }
@@ -21,15 +23,18 @@ export function GithubConnection({ connectRequest = 0 }: GithubConnectionProps) 
   const handleConnect = useCallback(async () => {
     setBusy(true)
     setError(null)
-    try { await connectGithub() }
+    try { await (onConnect ? onConnect() : connectGithub()) }
     catch (cause) {
       setError(cause instanceof Error ? cause.message : 'GitHub could not be connected.')
       setBusy(false)
     }
-  }, [])
+  }, [onConnect])
 
   useEffect(() => {
-    if (connectRequest > 0) void handleConnect()
+    if (connectRequest > handledConnectRequest.current) {
+      handledConnectRequest.current = connectRequest
+      void handleConnect()
+    }
   }, [connectRequest, handleConnect])
 
   const handleDisconnect = async () => {

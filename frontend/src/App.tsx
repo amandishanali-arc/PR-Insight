@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import './App.css'
 import { AnalyzeForm } from './components/AnalyzeForm'
 import { AnalysisProgress } from './components/AnalysisProgress'
@@ -16,6 +16,8 @@ import type { Review } from './types/review'
 import { AuthView } from './components/AuthView'
 import { useAuth } from './auth/AuthContext'
 import { GithubConnection } from './components/GithubConnection'
+import { connectGithub } from './services/githubAppApi'
+import { pendingGithubPr } from './services/pendingGithubPr'
 
 interface AppRoute {
   view: AppView
@@ -35,6 +37,12 @@ const readRouteFromHash = (): AppRoute => {
 }
 
 function App() {
+  const { user } = useAuth()
+  // Discard every user's input, results, history view, and GitHub status together.
+  return <UserWorkspace key={user?.id ?? 'signed-out'} />
+}
+
+function UserWorkspace() {
   const { user, isAuthenticated, loading: authLoading, logout } = useAuth()
   const [review, setReview] = useState<Review | null>(null)
   const [isLoading, setIsLoading] = useState(false)
@@ -45,6 +53,36 @@ function App() {
   const [activeView, setActiveView] = useState<AppView>(initialRoute.view)
   const [historyReviewId, setHistoryReviewId] = useState<string | null>(initialRoute.reviewId)
   const inputRef = useRef<HTMLInputElement>(null)
+  const analysisRequest = useRef(0)
+
+  useEffect(() => () => { analysisRequest.current += 1 }, [])
+
+  useEffect(() => {
+    if (!user || authLoading) return
+    const url = new URL(window.location.href)
+    const result = url.searchParams.get('github')
+    if (result !== 'connected' && result !== 'error') return
+    const pending = pendingGithubPr.read(user.id)
+    if (pending) setPullRequestUrl(pending)
+    if (result === 'connected') pendingGithubPr.clear(user.id)
+    else {
+      const reason = url.searchParams.get('reason')
+      setError(reason === 'repository_access'
+        ? 'GitHub could not verify access to this repository. Check your account and repository selection, then Connect GitHub again.'
+        : reason === 'authorization'
+          ? 'GitHub authorization was cancelled, invalid, or expired. Your PR is preserved; Connect GitHub again.'
+          : 'GitHub connection could not be completed. Your PR is preserved; try Connect GitHub again shortly.')
+    }
+    url.searchParams.delete('github')
+    url.searchParams.delete('reason')
+    window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`)
+  }, [user, authLoading])
+
+  const handleConnectGithub = useCallback(async () => {
+    if (!user) return
+    pendingGithubPr.save(user.id, pullRequestUrl)
+    await connectGithub(pullRequestUrl)
+  }, [user, pullRequestUrl])
 
   useEffect(() => {
     const syncView = () => {
@@ -70,28 +108,42 @@ function App() {
   }, [authLoading, isAuthenticated])
 
   const handleAnalyze = async (pullRequestUrl: string) => {
+    const request = ++analysisRequest.current
     setIsLoading(true)
     setError(null)
     setReview(null)
 
     try {
-      setReview(await createReview(pullRequestUrl))
+      const result = await createReview(pullRequestUrl)
+      if (request === analysisRequest.current) setReview(result)
     } catch (requestError) {
+      if (request !== analysisRequest.current) return
       setError(
         requestError instanceof Error
           ? requestError.message
           : 'Something went wrong while analyzing the pull request.',
       )
     } finally {
-      setIsLoading(false)
+      if (request === analysisRequest.current) setIsLoading(false)
     }
+  }
+
+  const clearAnalyzeState = () => {
+    analysisRequest.current += 1
+    setReview(null)
+    setError(null)
+    setPullRequestUrl('')
+    setIsLoading(false)
+  }
+
+  const handleLogout = () => {
+    clearAnalyzeState()
+    logout()
   }
 
   const handleNewReview = () => {
     window.location.hash = 'analyze'
-    setReview(null)
-    setError(null)
-    setPullRequestUrl('')
+    clearAnalyzeState()
     window.setTimeout(() => inputRef.current?.focus(), 0)
   }
 
@@ -110,7 +162,7 @@ function App() {
 
   return (
     <div className="app-shell">
-      <Header activeView={activeView} onNavigate={handleNavigate} user={user} onLogout={logout} />
+      <Header activeView={activeView} onNavigate={handleNavigate} user={user} onLogout={handleLogout} />
 
       <main>
         {authLoading && <section className="auth-loading"><span className="progress-spinner" /> Restoring your session...</section>}
@@ -124,7 +176,7 @@ function App() {
               <p className="hero-copy">AI-powered GitHub Pull Request reviews</p>
               <p className="hero-detail">Turn code changes into focused, actionable feedback before they reach production.</p>
               <FeatureRow />
-              <GithubConnection connectRequest={githubConnectRequest} />
+              <GithubConnection connectRequest={githubConnectRequest} onConnect={handleConnectGithub} />
               <AnalyzeForm inputRef={inputRef} pullRequestUrl={pullRequestUrl} onUrlChange={setPullRequestUrl} onSubmit={handleAnalyze} isLoading={isLoading} />
               {isLoading && <AnalysisProgress />}
               {error && <ErrorState message={error} onRetry={() => void handleAnalyze(pullRequestUrl)}

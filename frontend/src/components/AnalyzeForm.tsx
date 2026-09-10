@@ -36,7 +36,7 @@ export function AnalyzeForm({
   }
 
   return (
-    <form className="analyze-form" onSubmit={handleSubmit} noValidate>
+    <form className="analyze-form" onSubmit={handleSubmit} autoComplete="off" noValidate>
       <label htmlFor="pull-request-url">GitHub Pull Request URL</label>
       <div className="input-row">
         <div className="url-input-wrap">
@@ -61,7 +61,7 @@ export function AnalyzeForm({
             aria-describedby={validationError ? 'url-error' : 'url-hint'}
             aria-invalid={Boolean(validationError)}
             disabled={isLoading}
-            autoComplete="url"
+            autoComplete="off"
           />
         </div>
         <button type="submit" disabled={isLoading || !isValid}>

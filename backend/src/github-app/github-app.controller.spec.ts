@@ -1,9 +1,33 @@
 import { GUARDS_METADATA } from '@nestjs/common/constants';
 import { ConfigService } from '@nestjs/config';
+import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { GithubAppController } from './github-app.controller';
 
 describe('GithubAppController security', () => {
+  it.each([
+    [new Error('do-not-expose-token'), 'unavailable'],
+    [new BadRequestException('invalid state'), 'authorization'],
+    [new ForbiddenException('repository unavailable'), 'repository_access'],
+  ])('returns safe errors to the configured production frontend (%s)', async (error, reason) => {
+    const controller = new GithubAppController({ completeAuthorization: jest.fn().mockRejectedValue(error) } as never,
+      new ConfigService({ FRONTEND_URL: 'https://frontend.example.com/', NODE_ENV: 'production' }));
+    await expect(controller.setup('secret-code', 'secret-state')).resolves.toEqual({
+      url: `https://frontend.example.com/?github=error&reason=${reason}#analyze`, statusCode: 302,
+    });
+  });
+
+  it('refuses a localhost fallback when production FRONTEND_URL is missing', async () => {
+    const controller = new GithubAppController({} as never,
+      { get: (name: string) => name === 'NODE_ENV' ? 'production' : undefined } as never);
+    await expect(controller.setup('code', 'state')).rejects.toMatchObject({ status: 503 });
+  });
+
+  it('rejects an explicitly configured localhost frontend in production', async () => {
+    const controller = new GithubAppController({} as never,
+      new ConfigService({ FRONTEND_URL: 'http://localhost:5173', NODE_ENV: 'production' }));
+    await expect(controller.setup('code', 'state')).rejects.toMatchObject({ status: 503 });
+  });
   it.each(['connect', 'status', 'disconnect'] as const)('protects %s with JWT authentication', (method) => {
     const guards = Reflect.getMetadata(GUARDS_METADATA, GithubAppController.prototype[method]) as unknown[];
     expect(guards).toContain(JwtAuthGuard);

@@ -167,6 +167,18 @@ describe('ReviewsService', () => {
   it('does not expose another user\'s review or crash on legacy records', async () => {
     findOne.mockReturnValue(queryResult(null));
     await expect(service.findOne('507f1f77bcf86cd799439011', userId)).rejects.toBeInstanceOf(NotFoundException);
+    expect(String(findOne.mock.calls[0][0].userId)).toBe(userId);
+  });
+
+  it('passes the current user to GitHub access and scopes history to that same user', async () => {
+    const userB = '507f1f77bcf86cd799439099';
+    arrangeCreate(null, undefined);
+    await service.createReview('url', userB);
+    expect(githubService.getPullRequestDetails).toHaveBeenCalledWith('url', userB);
+    find.mockReturnValue({ sort: () => ({ exec: async () => [] }) });
+    await service.findAll(userB);
+    expect(String(find.mock.calls[0][0].userId)).toBe(userB);
+    expect(String(findOne.mock.calls[0][0].userId)).toBe(userB);
   });
 
   it('scopes duplicate detection to the authenticated user', async () => {

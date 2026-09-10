@@ -34,8 +34,14 @@ export class GithubAppService {
     private readonly config: ConfigService,
   ) {}
 
-  async createConnectUrl(userId: string): Promise<{ url: string }> {
-    const state = await this.createState(userId);
+  async createConnectUrl(userId: string, pullRequestUrl?: string): Promise<{ url: string }> {
+    let repositoryFullName: string | undefined;
+    if (pullRequestUrl) {
+      const match = typeof pullRequestUrl === 'string' && pullRequestUrl.trim().match(/^https:\/\/github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\/pull\/\d+\/?$/);
+      if (!match) throw new BadRequestException('Enter a valid GitHub pull request URL before connecting.');
+      repositoryFullName = `${match[1]}/${match[2]}`;
+    }
+    const state = await this.createState(userId, repositoryFullName);
     const params = new URLSearchParams({
       client_id: this.requiredConfig('GITHUB_APP_CLIENT_ID'),
       state,
@@ -71,8 +77,12 @@ export class GithubAppService {
       throw new ForbiddenException('The GitHub installation does not belong to the authorizing user');
     }
 
-    if (userInstallations.length === 0) {
-      const installState = await this.createState(pendingState.userId.toString());
+    const repositoryAccessible = !pendingState.repositoryFullName || await this.hasUserRepository(userToken, userInstallations, pendingState.repositoryFullName);
+    if (userInstallations.length === 0 || !repositoryAccessible) {
+      if (pendingState.selectionAttempted) {
+        throw new ForbiddenException('The requested repository is not available to the authorized GitHub installation.');
+      }
+      const installState = await this.createState(pendingState.userId.toString(), pendingState.repositoryFullName, true);
       const slug = this.requiredConfig('GITHUB_APP_SLUG');
       return {
         connected: false,
@@ -198,6 +208,22 @@ export class GithubAppService {
     return response.data;
   }
 
+  private async hasUserRepository(userToken: string, installations: InstallationInfo[], fullName: string): Promise<boolean> {
+    const owner = fullName.split('/')[0].toLowerCase();
+    for (const installation of installations.filter((item) => item.account.login.toLowerCase() === owner)) {
+      for (let page = 1; page <= 100; page += 1) {
+        const response = await firstValueFrom(this.httpService.get<{ repositories: { full_name: string }[]; total_count: number }>(
+          `https://api.github.com/user/installations/${installation.id}/repositories`,
+          { headers: this.githubHeaders(userToken), params: { per_page: 100, page }, timeout: 15_000 },
+        ));
+        if (response.data.repositories.some((repo) => repo.full_name.toLowerCase() === fullName.toLowerCase())) return true;
+        if (response.data.repositories.length < 100 || page * 100 >= response.data.total_count) break;
+        if (page === 100) throw new ServiceUnavailableException('Repository verification could not be completed. Please try again.');
+      }
+    }
+    return false;
+  }
+
   private async createAppAuthenticator(): Promise<AppAuth> {
     const appId = this.config.get<string>('GITHUB_APP_ID')?.trim();
     if (!appId || !/^\d+$/.test(appId)) {
@@ -242,12 +268,14 @@ export class GithubAppService {
     return createHash('sha256').update(state).digest('hex');
   }
 
-  private async createState(userId: string): Promise<string> {
+  private async createState(userId: string, repositoryFullName?: string, selectionAttempted = false): Promise<string> {
     const state = randomBytes(32).toString('base64url');
     await this.stateModel.create({
       userId: new Types.ObjectId(userId),
       stateHash: this.hashState(state),
       expiresAt: new Date(Date.now() + 10 * 60 * 1000),
+      ...(repositoryFullName ? { repositoryFullName } : {}),
+      selectionAttempted,
     });
     return state;
   }

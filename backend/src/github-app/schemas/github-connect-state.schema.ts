@@ -14,6 +14,12 @@ export class GithubConnectState {
 
   @Prop({ type: Date, required: true, expires: 0 })
   expiresAt!: Date;
+
+  @Prop({ type: String })
+  repositoryFullName?: string;
+
+  @Prop({ type: Boolean, default: false })
+  selectionAttempted?: boolean;
 }
 
 export const GithubConnectStateSchema = SchemaFactory.createForClass(GithubConnectState);
